@@ -1,0 +1,22 @@
+[package]
+name = "tempestforge-engine"
+version = "0.1.0"
+edition = "2021"
+exclude = ["crates/"]
+
+[workspace]
+  members = [
+    "crates/*",
+    "client"
+  ]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[profile.dev]
+opt-level = 1
+
+[dependencies]
+engine = { path = "crates/engine" }
+
+[[bin]]
+name = "client"
+path = "client/src/main.rs"
