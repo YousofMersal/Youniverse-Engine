@@ -1,15 +1,19 @@
 use std::time::Instant;
 
+use vulkano::device::{physical::PhysicalDeviceType, DeviceExtensions, QueueFlags};
 use winit::{
     event::{Event::*, VirtualKeyCode::*, WindowEvent::*},
     event_loop::{ControlFlow, EventLoop},
 };
 
+use super::vk::Vulkan;
 use super::window::Window;
 
+#[allow(dead_code)]
 pub struct Application {
     window: Window,
     start_time: std::time::Instant,
+    vk: Vulkan,
 }
 
 impl Application {
@@ -18,10 +22,46 @@ impl Application {
     }
 
     fn initialize(event_loop: &EventLoop<()>) -> Self {
-        let window = Window::init_window(&event_loop);
+        let mut vk = Vulkan::new();
+        vk.create_instance();
+        let window = Window::init_window(&event_loop, vk.get_instance().unwrap());
+
+        let Some(int) = vk.get_instance() else {
+            panic!("Could not create Vulkan instance!");
+        };
+
+        let device_extensions = DeviceExtensions {
+            khr_swapchain: true,
+            ..DeviceExtensions::empty()
+        };
+
+        int.enumerate_physical_devices()
+            .expect("Could not enumerate physical devices")
+            .filter(|p| p.supported_extensions().contains(&device_extensions))
+            .filter_map(|p| {
+                p.queue_family_properties()
+                    .iter()
+                    .enumerate()
+                    .position(|(i, q)| {
+                        q.queue_flags.intersects(QueueFlags::GRAPHICS)
+                            && p.surface_support(i as u32, &window.surface)
+                                .unwrap_or(false)
+                    })
+                    .map(|q| (p, q as u32))
+            })
+            .min_by_key(|(p, _)| match p.properties().device_type {
+                PhysicalDeviceType::DiscreteGpu => 0,
+                PhysicalDeviceType::IntegratedGpu => 1,
+                PhysicalDeviceType::VirtualGpu => 2,
+                PhysicalDeviceType::Cpu => 3,
+                PhysicalDeviceType::Other => 4,
+                _ => 5,
+            })
+            .expect("No device available");
 
         Self {
             window,
+            vk,
             start_time: Instant::now(),
         }
     }
@@ -39,13 +79,7 @@ impl Application {
                         self.window.dims = Some([size.width, size.height]);
                         dirty_swap = true;
                     }
-                    CloseRequested => {
-                        *ctr_flow = ControlFlow::Exit;
-                    }
-                    Destroyed => todo!(),
-                    DroppedFile(_) => todo!(),
-                    HoveredFile(_) => todo!(),
-                    HoveredFileCancelled => todo!(),
+                    CloseRequested => *ctr_flow = ControlFlow::Exit,
                     Focused(_) => {}
                     KeyboardInput { input, .. } => match input.virtual_keycode {
                         Some(Escape) => {
@@ -53,27 +87,9 @@ impl Application {
                         }
                         _ => (),
                     },
-                    CursorMoved {
-                        device_id,
-                        position,
-                        ..
-                    } => {}
-                    CursorEntered { device_id } => {}
-                    CursorLeft { device_id } => {}
-                    MouseWheel {
-                        device_id,
-                        delta,
-                        phase,
-                        ..
-                    } => {}
-                    MouseInput {
-                        device_id,
-                        state,
-                        button,
-                        ..
-                    } => {}
                     _ => {}
                 },
+                RedrawEventsCleared => {}
                 MainEventsCleared => {
                     // swapchain is invalid if window is resized
                     if dirty_swap {
@@ -93,13 +109,6 @@ impl Application {
                     //     .device_wait_idle()
                     //     .expect("Failed to wait device idle!")
                 }
-                // NewEvents(_) => {}
-                // DeviceEvent { device_id, event } => {}
-                // UserEvent(_) => {}
-                // Suspended => {}
-                // Resumed => {}
-                // RedrawRequested(_) => {}
-                // RedrawEventsCleared => {}
                 _ => {}
             }
         });
