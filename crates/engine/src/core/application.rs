@@ -1,8 +1,10 @@
 use std::time::Instant;
 
-use vulkano::device::{physical::PhysicalDeviceType, DeviceExtensions, QueueFlags};
+use vulkano::device::{Device, DeviceExtensions};
 use winit::{
-    event::{Event::*, VirtualKeyCode::*, WindowEvent::*},
+    event::{
+        ElementState, Event::*, KeyboardInput, ModifiersState, VirtualKeyCode::*, WindowEvent::*,
+    },
     event_loop::{ControlFlow, EventLoop},
 };
 
@@ -24,40 +26,27 @@ impl Application {
     fn initialize(event_loop: &EventLoop<()>) -> Self {
         let mut vk = Vulkan::new();
         vk.create_instance();
-        let window = Window::init_window(&event_loop, vk.get_instance().unwrap());
+        let window = Window::init_window(
+            event_loop,
+            vk.get_instance().expect("Culd not get isntance"),
+        );
 
-        let Some(int) = vk.get_instance() else {
-            panic!("Could not create Vulkan instance!");
-        };
+        let debug_callback = vk.create_debug_callback();
+
+        vk.set_debug_message(debug_callback);
 
         let device_extensions = DeviceExtensions {
             khr_swapchain: true,
             ..DeviceExtensions::empty()
         };
 
-        int.enumerate_physical_devices()
-            .expect("Could not enumerate physical devices")
-            .filter(|p| p.supported_extensions().contains(&device_extensions))
-            .filter_map(|p| {
-                p.queue_family_properties()
-                    .iter()
-                    .enumerate()
-                    .position(|(i, q)| {
-                        q.queue_flags.intersects(QueueFlags::GRAPHICS)
-                            && p.surface_support(i as u32, &window.surface)
-                                .unwrap_or(false)
-                    })
-                    .map(|q| (p, q as u32))
-            })
-            .min_by_key(|(p, _)| match p.properties().device_type {
-                PhysicalDeviceType::DiscreteGpu => 0,
-                PhysicalDeviceType::IntegratedGpu => 1,
-                PhysicalDeviceType::VirtualGpu => 2,
-                PhysicalDeviceType::Cpu => 3,
-                PhysicalDeviceType::Other => 4,
-                _ => 5,
-            })
-            .expect("No device available");
+        vk.select_physical_device(&window, &device_extensions);
+
+        vk.set_up_device(&device_extensions);
+
+        vk.create_swapchain(&window);
+
+        vk.set_mem_alloc();
 
         Self {
             window,
@@ -70,8 +59,17 @@ impl Application {
     fn main_loop(mut self, event_loop: EventLoop<()>) {
         let mut dirty_swap = false;
 
+        let monitor = event_loop
+            .available_monitors()
+            .next()
+            .expect("no monitor found!");
+
+        let mut modifiers = ModifiersState::default();
+
         event_loop.run(move |event, _, ctr_flow| {
-            *ctr_flow = ControlFlow::Poll;
+            ctr_flow.set_poll();
+
+            let state = modifiers.shift();
 
             match event {
                 WindowEvent { event, .. } => match event {
@@ -81,12 +79,35 @@ impl Application {
                     }
                     CloseRequested => *ctr_flow = ControlFlow::Exit,
                     Focused(_) => {}
-                    KeyboardInput { input, .. } => match input.virtual_keycode {
-                        Some(Escape) => {
+                    winit::event::WindowEvent::KeyboardInput {
+                        input:
+                            KeyboardInput {
+                                virtual_keycode: Some(v_code),
+                                state: ElementState::Pressed,
+                                ..
+                            },
+                        ..
+                    } => match v_code {
+                        Escape => {
                             *ctr_flow = ControlFlow::Exit;
+                        }
+                        F1 => {
+                            // *ctr_flow = ControlFlow::Exit;
+                            self.vk.toggle_debug_message();
+                        }
+                        B => {
+                            if modifiers.shift() {
+                                let fullscreen = Some(winit::window::Fullscreen::Borderless(Some(
+                                    monitor.clone(),
+                                )));
+                                self.window.window.set_fullscreen(fullscreen);
+                            } else {
+                                self.window.window.set_fullscreen(None);
+                            }
                         }
                         _ => (),
                     },
+                    ModifiersChanged(mf) => modifiers = mf,
                     _ => {}
                 },
                 RedrawEventsCleared => {}
