@@ -4,14 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-vulkano = "0.33.0"
-vulkano-util = "0.33.0"
-vulkano-shaders = "0.33.0"
-vulkano-win = "0.33.0"
 winit = "0.28.3"
+ash = {version = "0.37.2", features = ["linked"]}
+ash-window = "0.12.0"
+raw-window-handle = "0.5.2"
 
 [profile.dev]
 opt-level = 1
 
+[profile.dev.package."*"]
+opt-level = 3
+
 # Future dependencies for the engine
-#egui_winit_vulkano = "0.24.0"

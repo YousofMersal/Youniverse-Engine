@@ -6,7 +6,7 @@ exclude = ["crates/"]
 
 [workspace]
   members = [
-    "crates/*",
+    # "crates/*",
     "client"
   ]
 

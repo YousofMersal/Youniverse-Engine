@@ -1,6 +1,8 @@
-use std::time::Instant;
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
-use vulkano::device::{Device, DeviceExtensions};
 use winit::{
     event::{
         ElementState, Event::*, KeyboardInput, ModifiersState, VirtualKeyCode::*, WindowEvent::*,
@@ -13,7 +15,7 @@ use super::window::Window;
 
 #[allow(dead_code)]
 pub struct Application {
-    window: Window,
+    window: Arc<Mutex<Window>>,
     start_time: std::time::Instant,
     vk: Vulkan,
 }
@@ -23,30 +25,32 @@ impl Application {
         self.start_time
     }
 
-    fn initialize(event_loop: &EventLoop<()>) -> Self {
+    fn initialize(event_loop: Arc<EventLoop<()>>) -> Self {
+        let window = Arc::new(Mutex::new(Window::init_window(event_loop.clone())));
+
         let mut vk = Vulkan::new();
-        vk.create_instance();
-        let window = Window::init_window(
-            event_loop,
-            vk.get_instance().expect("Culd not get isntance"),
+        vk.create_instance(event_loop.clone());
+
+        window.lock().unwrap().create_surface(
+            vk.get_vulkan_entry().clone(),
+            vk.get_instance().unwrap().clone(),
         );
 
-        let debug_callback = vk.create_debug_callback();
+        vk.create_and_set_debug_callback();
 
-        vk.set_debug_message(debug_callback);
+        vk.select_physical_device(window.clone());
 
-        let device_extensions = DeviceExtensions {
-            khr_swapchain: true,
-            ..DeviceExtensions::empty()
-        };
+        vk.create_logical_device(window.clone());
 
-        vk.select_physical_device(&window, &device_extensions);
+        vk.make_queues();
 
-        vk.set_up_device(&device_extensions);
+        vk.create_swapchain(window.clone());
 
-        vk.create_swapchain(&window);
+        vk.create_image_views();
 
-        vk.set_mem_alloc();
+        vk.create_render_pass();
+
+        // vk.set_mem_alloc();
 
         Self {
             window,
@@ -66,7 +70,8 @@ impl Application {
 
         let mut modifiers = ModifiersState::default();
 
-        event_loop.run(move |event, _, ctr_flow| {
+        let c = event_loop;
+        c.run(move |event, _, ctr_flow| {
             ctr_flow.set_poll();
 
             let state = modifiers.shift();
@@ -74,7 +79,9 @@ impl Application {
             match event {
                 WindowEvent { event, .. } => match event {
                     Resized(size) => {
-                        self.window.dims = Some([size.width, size.height]);
+                        let mut window =
+                            self.window.lock().expect("Could not lock mutex on window");
+                        window.dims = Some([size.width, size.height]);
                         dirty_swap = true;
                     }
                     CloseRequested => *ctr_flow = ControlFlow::Exit,
@@ -96,13 +103,15 @@ impl Application {
                             self.vk.toggle_debug_message();
                         }
                         B => {
+                            let window =
+                                self.window.lock().expect("Could not lock mutex on window");
                             if modifiers.shift() {
                                 let fullscreen = Some(winit::window::Fullscreen::Borderless(Some(
                                     monitor.clone(),
                                 )));
-                                self.window.window.set_fullscreen(fullscreen);
+                                window.window.set_fullscreen(fullscreen);
                             } else {
-                                self.window.window.set_fullscreen(None);
+                                window.window.set_fullscreen(None);
                             }
                         }
                         _ => (),
@@ -113,8 +122,9 @@ impl Application {
                 RedrawEventsCleared => {}
                 MainEventsCleared => {
                     // swapchain is invalid if window is resized
+                    let window = self.window.lock().expect("Could not lock mutex on window");
                     if dirty_swap {
-                        let size = self.window.window.inner_size();
+                        let size = window.window.inner_size();
                         // let size = window.inner_size();
                         if size.width > 0 && size.height > 0 {
                             // recreate_swapchain(&mut state.swapchain, &window);
@@ -136,9 +146,13 @@ impl Application {
     }
 
     pub fn run() {
-        let event_loop = EventLoop::new();
-        let app = Application::initialize(&event_loop);
+        let event_loop = Arc::new(EventLoop::new());
+        let app = Application::initialize(event_loop.clone());
 
-        app.main_loop(event_loop);
+        if let Ok(eloop) = Arc::try_unwrap(event_loop) {
+            app.main_loop(eloop);
+        } else {
+            panic!("Failed to unwrap event loop");
+        }
     }
 }
