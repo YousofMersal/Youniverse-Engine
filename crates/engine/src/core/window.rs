@@ -8,11 +8,12 @@ use winit::{event_loop::EventLoop, window::WindowBuilder};
 const DEFAULT_WIDTH: u32 = 1920;
 const DEFAULT_HEIGHT: u32 = 1080;
 
+#[derive(Clone)]
 pub struct Window {
     pub dims: Option<[u32; 2]>,
     pub window: Arc<winit::window::Window>,
     pub surface: Option<SurfaceInfo>,
-    pub event_loop: Arc<EventLoop<()>>,
+    pub event_loop: Option<Arc<EventLoop<()>>>,
 }
 
 #[derive(Clone)]
@@ -30,8 +31,19 @@ impl SurfaceInfo {
     }
 }
 
+// impl Default for Window {
+//     fn default() -> Self {
+//         Self {
+//             dims: Default::default(),
+//             window: Default::default(),
+//             surface: Default::default(),
+//             event_loop: Default::default(),
+//         }
+//     }
+// }
+
 impl Window {
-    pub fn init_window(event_loop: Arc<EventLoop<()>>) -> Self {
+    pub fn init_window(event_loop: EventLoop<()>) -> Self {
         let window = Arc::new(
             WindowBuilder::new()
                 .with_title("TempestForge Engine")
@@ -46,7 +58,7 @@ impl Window {
             window,
             dims,
             surface: None,
-            event_loop,
+            event_loop: Some(Arc::new(event_loop)),
         }
     }
 

@@ -1,7 +1,6 @@
 use std::{
     collections::HashSet,
-    ffi::{c_char, c_void, CStr, CString},
-    str::from_utf8_unchecked,
+    ffi::{c_char, c_void, CString},
     sync::{Arc, Mutex},
 };
 
@@ -23,7 +22,6 @@ use crate::core::util::vk_to_str;
 use super::{util::populate_debug_messenger_create_info, window::Window};
 
 // const REQUIRED_EXTENSIONS: Vec<&str> = vec!["VK_KHR_swapchain"];
-
 pub struct Vulkan {
     instance: Option<Arc<Instance>>,
     entry: Arc<Entry>,
@@ -166,8 +164,7 @@ impl Vulkan {
         let queue_families =
             self.find_queue_families(&self.instance.clone().unwrap(), device, window.clone());
 
-        let is_extensions_supported =
-            self.check_device_extension_support(device, window.lock().unwrap().event_loop.clone());
+        let is_extensions_supported = self.check_device_extension_support(device);
         dbg!(&is_extensions_supported);
         let swapchain_support = if is_extensions_supported {
             let swapchain_support = self.query_spawnchain_support(device, window.clone());
@@ -206,11 +203,7 @@ impl Vulkan {
         }
     }
 
-    fn check_device_extension_support(
-        &self,
-        device: &PhysicalDevice,
-        event_loop: Arc<EventLoop<()>>,
-    ) -> bool {
+    fn check_device_extension_support(&self, device: &PhysicalDevice) -> bool {
         let extensions = unsafe {
             self.instance
                 .clone()
@@ -219,7 +212,7 @@ impl Vulkan {
         }
         .unwrap();
 
-        let req_extension: Vec<&str> = self.get_swap_required_extensions(event_loop);
+        let req_extension: Vec<&str> = self.get_swap_required_extensions();
 
         let res = req_extension.iter().all(|extension| {
             extensions
@@ -300,15 +293,20 @@ impl Vulkan {
 
         let enabled_extension_names = vec![ash::extensions::khr::Swapchain::name().as_ptr()];
 
-        let layers: Vec<*const i8> = if self.use_validation_layers {
+        let layers: Vec<CString> = if self.is_using_validation_layers() {
+            println!("Available validation layers:");
             VALIDATION_LAYERS
                 .iter()
-                .map(|x| CString::new(*x).unwrap())
-                .map(|x| x.as_ptr())
+                .map(|layer| {
+                    println!("{}", &layer);
+                    CString::new(*layer).unwrap()
+                })
                 .collect()
         } else {
             vec![]
         };
+
+        let layers: Vec<*const i8> = layers.iter().map(|s| s.as_ptr()).collect();
 
         let device_create_info = DeviceCreateInfo::builder()
             .queue_create_infos(&queue_infos)
@@ -440,7 +438,7 @@ impl Vulkan {
             VALIDATION_LAYERS
                 .iter()
                 .map(|layer| {
-                    // println!("{}", &layer);
+                    println!("{}", &layer);
                     CString::new(*layer).unwrap()
                 })
                 .collect()
@@ -507,7 +505,7 @@ impl Vulkan {
                 })
         }
     }
-    pub fn get_swap_required_extensions(&self, event_loop: Arc<EventLoop<()>>) -> Vec<&str> {
+    pub fn get_swap_required_extensions(&self) -> Vec<&str> {
         ["VK_KHR_swapchain"].to_vec()
     }
 
