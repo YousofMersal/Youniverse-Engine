@@ -410,7 +410,7 @@ impl Vulkan {
     //     }
     // }
 
-    pub fn create_instance(&mut self, e_loop: Arc<EventLoop<()>>) {
+    pub fn create_instance(&mut self, e_loop: &EventLoop<()>) {
         if self.is_using_validation_layers() && !self.check_validation_layers_support() {
             panic!("Validation layers requested, but not available!");
         }
@@ -431,7 +431,7 @@ impl Vulkan {
             .engine_version(version.to_owned())
             .api_version(make_api_version(0, 1, 3, 238));
 
-        let extension_names = self.get_required_extensions(e_loop.clone());
+        let extension_names = self.get_required_extensions(&e_loop);
 
         let layers: Vec<CString> = if self.is_using_validation_layers() {
             println!("Available validation layers:");
@@ -509,7 +509,7 @@ impl Vulkan {
         ["VK_KHR_swapchain"].to_vec()
     }
 
-    pub fn get_required_extensions(&self, event_loop: Arc<EventLoop<()>>) -> Vec<*const c_char> {
+    pub fn get_required_extensions(&self, event_loop: &EventLoop<()>) -> Vec<*const c_char> {
         let mut res = enumerate_required_extensions(event_loop.raw_display_handle())
             .expect("Could not enumerate required extensions")
             .to_vec();
