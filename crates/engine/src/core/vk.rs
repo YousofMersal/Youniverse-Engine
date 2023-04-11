@@ -128,6 +128,14 @@ impl Vulkan {
                 .iter()
                 .filter(|device| self.is_device_suitable(device, window.clone()))
                 .map(|device| (device, self.rate_device_suitability(&int, device)))
+                // .inspect(|(device, score)| {
+                //     let device_props = unsafe { int.get_physical_device_properties(**device) };
+                //     println!(
+                //         "Device: {} has a score of {}",
+                //         vk_to_str(&device_props.device_name),
+                //         score
+                //     );
+                // })
                 .max_by(|(_, x), (_, y)| x.cmp(y))
                 .expect("Could not find any suitable GPU!")
                 .0,
@@ -144,6 +152,11 @@ impl Vulkan {
         // big plus that it's a GPU
         if device_props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU {
             score += 1000;
+        }
+
+        // small plus that it's a integrated
+        if device_props.device_type == vk::PhysicalDeviceType::INTEGRATED_GPU {
+            score += 100;
         }
 
         // add add max image dimensions to score
@@ -165,7 +178,6 @@ impl Vulkan {
             self.find_queue_families(&self.instance.clone().unwrap(), device, window.clone());
 
         let is_extensions_supported = self.check_device_extension_support(device);
-        dbg!(&is_extensions_supported);
         let swapchain_support = if is_extensions_supported {
             let swapchain_support = self.query_spawnchain_support(device, window.clone());
             !swapchain_support.formats.is_empty() && !swapchain_support.present_modes.is_empty()
@@ -173,11 +185,17 @@ impl Vulkan {
             false
         };
 
-        device_props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU
-            && device_features.geometry_shader > 0
-            && queue_families.is_complete()
-            && is_extensions_supported
-            && swapchain_support
+        match device_props.device_type {
+            vk::PhysicalDeviceType::DISCRETE_GPU | vk::PhysicalDeviceType::INTEGRATED_GPU => {
+                println!("Found a GPU");
+
+                device_features.geometry_shader > 0
+                    && queue_families.is_complete()
+                    && is_extensions_supported
+                    && swapchain_support
+            }
+            _ => false,
+        }
     }
 
     pub fn make_queues(&mut self) {
