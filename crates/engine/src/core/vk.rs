@@ -1,15 +1,20 @@
 use std::{
     collections::HashSet,
     ffi::{c_char, c_void, CString},
+    mem::size_of,
     sync::{Arc, Mutex},
 };
 
 use ash::{
     extensions::ext::DebugUtils,
     vk::{
-        self, make_api_version, ComponentMapping, CompositeAlphaFlagsKHR, DebugUtilsMessengerEXT,
-        DeviceCreateInfo, DeviceQueueCreateInfo, Extent2D, ImageAspectFlags, ImageUsageFlags,
-        ImageView, ImageViewType, PhysicalDevice, Queue, RenderPass, SwapchainCreateInfoKHR,
+        self, make_api_version, CommandBufferAllocateInfo, CommandBufferLevel,
+        CommandPoolCreateFlags, ComponentMapping, CompositeAlphaFlagsKHR, DebugUtilsMessengerEXT,
+        DescriptorBufferInfo, DescriptorPoolCreateInfo, DescriptorPoolSize,
+        DescriptorSetAllocateInfo, DescriptorSetLayoutBinding, DescriptorType, DeviceCreateInfo,
+        DeviceQueueCreateInfo, Extent2D, Framebuffer, ImageAspectFlags, ImageUsageFlags, ImageView,
+        ImageViewType, PhysicalDevice, Queue, RenderPass, ShaderStageFlags, SwapchainCreateInfoKHR,
+        WriteDescriptorSet,
     },
     Device, Entry, Instance,
 };
@@ -19,7 +24,14 @@ use winit::event_loop::EventLoop;
 
 use crate::core::util::vk_to_str;
 
-use super::{util::populate_debug_messenger_create_info, window::Window};
+use super::sync::{InFlightFrames, MAX_FRAMES_IN_FLIGHT};
+
+use super::{
+    buffer::{BufferMem, UniformBufferMem, UniformBufferObject},
+    pipeline::Pipeline,
+    util::populate_debug_messenger_create_info,
+    window::Window,
+};
 
 // const REQUIRED_EXTENSIONS: Vec<&str> = vec!["VK_KHR_swapchain"];
 pub struct Vulkan {
@@ -34,6 +46,17 @@ pub struct Vulkan {
     swapchain: Option<Arc<SwapChain>>,
     images: Option<Vec<Arc<ImageView>>>,
     render_pass: Option<Arc<RenderPass>>,
+    descriptor_set_layout: Option<Arc<vk::DescriptorSetLayout>>,
+    pipeline: Option<Arc<Pipeline>>,
+    framebuffers: Option<Vec<Arc<vk::Framebuffer>>>,
+    command_pool: Option<Arc<vk::CommandPool>>,
+    vertex_buffer: Option<Arc<BufferMem>>,
+    index_buffer: Option<Arc<BufferMem>>,
+    uniform_buffers: Option<Arc<UniformBufferMem>>,
+    descriptor_pool: Option<Arc<vk::DescriptorPool>>,
+    descriptor_sets: Option<Vec<vk::DescriptorSet>>,
+    command_buffers: Option<Vec<vk::CommandBuffer>>,
+    sync: Option<Arc<Mutex<InFlightFrames>>>,
 }
 
 pub struct Queues {
@@ -100,11 +123,26 @@ impl Vulkan {
             images: None,
             render_pass: None,
             indicies: None,
+            descriptor_set_layout: None,
+            pipeline: None,
+            framebuffers: None,
+            command_pool: None,
+            vertex_buffer: None,
+            index_buffer: None,
+            uniform_buffers: None,
+            descriptor_pool: None,
+            descriptor_sets: None,
+            command_buffers: None,
+            sync: None,
         }
     }
 
     pub fn get_instance(&self) -> Option<Arc<Instance>> {
         self.instance.clone()
+    }
+
+    pub fn get_device(&self) -> Arc<Device> {
+        self.device.clone().expect("Could not get device")
     }
 
     pub fn select_physical_device(&mut self, window: Arc<Mutex<Window>>) {
@@ -128,14 +166,6 @@ impl Vulkan {
                 .iter()
                 .filter(|device| self.is_device_suitable(device, window.clone()))
                 .map(|device| (device, self.rate_device_suitability(&int, device)))
-                // .inspect(|(device, score)| {
-                //     let device_props = unsafe { int.get_physical_device_properties(**device) };
-                //     println!(
-                //         "Device: {} has a score of {}",
-                //         vk_to_str(&device_props.device_name),
-                //         score
-                //     );
-                // })
                 .max_by(|(_, x), (_, y)| x.cmp(y))
                 .expect("Could not find any suitable GPU!")
                 .0,
@@ -313,6 +343,7 @@ impl Vulkan {
 
         let layers: Vec<CString> = if self.is_using_validation_layers() {
             println!("Available validation layers:");
+
             VALIDATION_LAYERS
                 .iter()
                 .map(|layer| {
@@ -420,14 +451,6 @@ impl Vulkan {
         }));
     }
 
-    // pub fn set_mem_alloc(&mut self) {
-    //     if let Some(device) = &self.device {
-    //         self.mem_alloc = Some(StandardMemoryAllocator::new_default(device.clone()));
-    //     } else {
-    //         panic!("Vulkan device not set!\nFailed to create memory allocator!");
-    //     }
-    // }
-
     pub fn create_instance(&mut self, e_loop: &EventLoop<()>) {
         if self.is_using_validation_layers() && !self.check_validation_layers_support() {
             panic!("Validation layers requested, but not available!");
@@ -452,13 +475,9 @@ impl Vulkan {
         let extension_names = self.get_required_extensions(&e_loop);
 
         let layers: Vec<CString> = if self.is_using_validation_layers() {
-            println!("Available validation layers:");
             VALIDATION_LAYERS
                 .iter()
-                .map(|layer| {
-                    println!("{}", &layer);
-                    CString::new(*layer).unwrap()
-                })
+                .map(|layer| CString::new(*layer).unwrap())
                 .collect()
         } else {
             vec![]
@@ -715,7 +734,7 @@ impl Vulkan {
                         .base_mip_level(0)
                         .level_count(1)
                         .base_array_layer(0)
-                        .layer_count(0),
+                        .layer_count(1),
                 )
                 .image(image);
 
@@ -772,11 +791,302 @@ impl Vulkan {
                 .expect("unable to create render pass")
         }));
     }
+
+    pub fn create_descriptor_set_layout(&mut self) {
+        let bindings = [*DescriptorSetLayoutBinding::builder()
+            .binding(0)
+            .descriptor_type(DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(ShaderStageFlags::VERTEX)];
+
+        let layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
+
+        let layout = unsafe {
+            self.get_device()
+                .create_descriptor_set_layout(&layout_info, None)
+                .expect("Failed to create descriptor layout")
+        };
+        self.descriptor_set_layout = Some(Arc::new(layout));
+    }
+
+    pub fn create_framebuffers(&mut self) {
+        let images = self.images.clone().expect("No image views");
+        let mut framebuffers = Vec::with_capacity(images.len());
+
+        for image in &images {
+            let attachments = [*image.as_ref()];
+
+            let framebuffer_info = vk::FramebufferCreateInfo::builder()
+                .render_pass(*self.render_pass.clone().unwrap())
+                .attachments(&attachments)
+                .width(self.swapchain.clone().unwrap().swapchain_extent.width)
+                .height(self.swapchain.clone().unwrap().swapchain_extent.height)
+                .layers(1);
+
+            let framebuffer = unsafe {
+                self.device
+                    .clone()
+                    .unwrap()
+                    .create_framebuffer(&framebuffer_info, None)
+                    .expect("Could not create framebuffer")
+            };
+
+            framebuffers.push(Arc::new(framebuffer));
+        }
+
+        self.framebuffers = Some(framebuffers);
+    }
+
+    pub fn create_command_pool(&mut self) {
+        let pool_info = vk::CommandPoolCreateInfo::builder()
+            .flags(CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+            .queue_family_index(self.indicies.clone().unwrap().graphics_family.unwrap());
+
+        let pool = unsafe {
+            self.device
+                .clone()
+                .unwrap()
+                .create_command_pool(&pool_info, None)
+                .expect("Failed to create command pool")
+        };
+
+        self.command_pool = Some(Arc::new(pool));
+    }
+
+    // pub(crate) fn create_texture_image(&self, arg: &str) -> _ {
+    //     todo!()
+    // }
+
+    pub fn create_vertex_buffer(&mut self) {
+        self.vertex_buffer = Some(Arc::new(BufferMem::new(self)));
+    }
+
+    pub(crate) fn create_index_buffer(&mut self) {
+        self.index_buffer = Some(Arc::new(BufferMem::new(self)));
+    }
+
+    pub fn create_uniform_buffers(&mut self) {
+        self.uniform_buffers = Some(Arc::new(UniformBufferMem::new(self)));
+    }
+
+    pub fn create_descriptor_pool(&mut self) {
+        let pool_size = [*DescriptorPoolSize::builder()
+            .descriptor_count(MAX_FRAMES_IN_FLIGHT as u32)
+            .ty(DescriptorType::UNIFORM_BUFFER)];
+
+        let pool_info = DescriptorPoolCreateInfo::builder()
+            .pool_sizes(&pool_size)
+            .max_sets(MAX_FRAMES_IN_FLIGHT as u32);
+
+        let pool = unsafe {
+            self.get_device()
+                .create_descriptor_pool(&pool_info, None)
+                .expect("Failed to create descriptor pool")
+        };
+
+        self.descriptor_pool = Some(Arc::new(pool));
+    }
+
+    pub fn create_descriptor_sets(&mut self) {
+        let layouts = vec![*self.descriptor_set_layout.clone().unwrap(); MAX_FRAMES_IN_FLIGHT];
+
+        let alloc_info = DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(*self.descriptor_pool.clone().unwrap())
+            .set_layouts(&layouts);
+
+        let sets = unsafe {
+            self.get_device()
+                .allocate_descriptor_sets(&alloc_info)
+                .expect("Failed to allocate descriptor sets")
+        };
+
+        for (i, &descriptor_set) in sets.iter().enumerate() {
+            let desc_buffer_info = [*DescriptorBufferInfo::builder()
+                .buffer(self.uniform_buffers.as_ref().unwrap().buffers[i])
+                .offset(0)
+                .range(size_of::<UniformBufferObject>() as u64)];
+
+            let descriptor_write_set = [*WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(0)
+                .dst_array_element(0)
+                .descriptor_type(DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&desc_buffer_info)];
+
+            unsafe {
+                self.get_device()
+                    .update_descriptor_sets(&descriptor_write_set, &[]);
+            }
+        }
+
+        self.descriptor_sets = Some(sets);
+    }
+
+    pub fn create_command_buffers(&mut self) {
+        let alloc_info = CommandBufferAllocateInfo::builder()
+            .command_pool(*self.get_command_pool())
+            .level(CommandBufferLevel::PRIMARY)
+            .command_buffer_count(MAX_FRAMES_IN_FLIGHT as u32);
+
+        self.command_buffers = Some(unsafe {
+            self.get_device()
+                .allocate_command_buffers(&alloc_info)
+                .expect("Failed to allocate command buffers")
+        });
+    }
+
+    pub fn create_sync_objects(&mut self) {
+        self.sync = Some(Arc::new(Mutex::new(InFlightFrames::new(self))));
+    }
+
+    pub fn get_swapchain(&self) -> Arc<SwapChain> {
+        self.swapchain
+            .clone()
+            .expect("Could not retrieve the swapchain")
+    }
+
+    pub fn get_descriptor_set_layout(&self) -> Arc<vk::DescriptorSetLayout> {
+        self.descriptor_set_layout
+            .clone()
+            .expect("Could not get descript_set")
+    }
+
+    pub fn get_render_pass(&self) -> Arc<RenderPass> {
+        self.render_pass.clone().expect("Could not get render pass")
+    }
+
+    pub fn create_graphics_pipeline(&mut self) {
+        let pipeline = Pipeline::new(self);
+        self.pipeline = Some(Arc::new(pipeline));
+    }
+
+    pub(crate) fn get_physical_device(&self) -> Arc<PhysicalDevice> {
+        self.physical_device
+            .clone()
+            .expect("Could not get physical device")
+    }
+
+    pub fn get_command_pool(&self) -> Arc<vk::CommandPool> {
+        self.command_pool
+            .clone()
+            .expect("Could not get command pool")
+    }
+
+    pub fn get_queues(&self) -> Arc<Queues> {
+        self.queues.clone().expect("Could not get queues")
+    }
+
+    pub unsafe fn cleanup_swapchain(&mut self) {
+        let device = &self.get_device();
+
+        self.framebuffers
+            .as_ref()
+            .unwrap()
+            .iter()
+            .for_each(|buffer| device.destroy_framebuffer(*buffer.as_ref(), None));
+
+        self.images.as_ref().unwrap().iter().for_each(|image| {
+            device.destroy_image_view(*image.as_ref(), None);
+        });
+
+        self.get_swapchain()
+            .swapchain_loader
+            .destroy_swapchain(self.get_swapchain().swapchain, None);
+    }
+
+    pub fn recreate_swapchain(&mut self, window: Arc<Mutex<Window>>) {
+        unsafe {
+            self.get_device()
+                .device_wait_idle()
+                .expect("Failed to wait idle");
+
+            self.cleanup_swapchain();
+        }
+
+        self.create_swapchain(window);
+
+        self.create_image_views();
+
+        self.create_framebuffers();
+    }
+
+    pub fn get_sync(&self) -> Arc<Mutex<InFlightFrames>> {
+        self.sync.clone().unwrap()
+    }
+
+    pub fn get_command_buffers(&self) -> &Vec<vk::CommandBuffer> {
+        self.command_buffers.as_ref().unwrap()
+    }
+
+    pub fn get_framebuffers(&self) -> Vec<Arc<Framebuffer>> {
+        self.framebuffers.unwrap()
+    }
 }
 
 impl Default for Vulkan {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for Vulkan {
+    fn drop(&mut self) {
+        unsafe {
+            self.cleanup_swapchain();
+
+            let d = self.descriptor_pool.as_deref().unwrap();
+
+            self.get_device().destroy_descriptor_pool(*d, None);
+
+            for i in 0..MAX_FRAMES_IN_FLIGHT {
+                self.get_device()
+                    .destroy_buffer(self.uniform_buffers.as_deref().unwrap().buffers[i], None);
+                self.get_device()
+                    .free_memory(self.uniform_buffers.as_deref().unwrap().mems[i], None);
+            }
+
+            self.get_device()
+                .destroy_buffer(self.index_buffer.as_deref().unwrap().buffer, None);
+            self.get_device()
+                .free_memory(self.index_buffer.as_deref().unwrap().memory, None);
+
+            self.get_device()
+                .destroy_buffer(self.vertex_buffer.as_deref().unwrap().buffer, None);
+            self.get_device()
+                .free_memory(self.vertex_buffer.as_deref().unwrap().memory, None);
+
+            self.get_device().destroy_descriptor_set_layout(
+                *self.descriptor_set_layout.as_deref().unwrap(),
+                None,
+            );
+
+            self.get_device()
+                .destroy_pipeline(self.pipeline.as_deref().unwrap().get_pipeline(), None);
+            self.get_device()
+                .destroy_pipeline_layout(self.pipeline.as_deref().unwrap().get_layout(), None);
+
+            self.get_device()
+                .destroy_render_pass(*self.render_pass.as_deref().unwrap(), None);
+
+            for object in &self.sync.as_deref().unwrap().lock().unwrap().sync_objects {
+                self.get_device().destroy_fence(object.fence, None);
+                self.get_device()
+                    .destroy_semaphore(object.image_available_semaphores, None);
+                self.get_device()
+                    .destroy_semaphore(object.render_finished_semaphore, None);
+            }
+
+            self.get_device()
+                .destroy_command_pool(*self.command_pool.as_deref().unwrap(), None);
+
+            self.get_device().destroy_device(None);
+
+            if self.is_using_validation_layers() {
+                std::mem::drop(self.debug_message.as_ref().unwrap());
+            }
+
+            self.instance.as_deref().unwrap().destroy_instance(None);
+        }
     }
 }
 

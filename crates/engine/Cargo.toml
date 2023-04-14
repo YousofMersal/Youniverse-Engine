@@ -8,6 +8,8 @@ winit = "0.28.3"
 ash = {version = "0.37.2", features = ["linked"]}
 ash-window = "0.12.0"
 raw-window-handle = "0.5.2"
+glam = { version = "0.23.0", features = ["bytemuck"] }
+memoffset = "0.8.0"
 
 [profile.dev]
 opt-level = 1

@@ -3,6 +3,10 @@ use std::{
     time::Instant,
 };
 
+use ash::vk::{
+    self, ClearColorValue, ClearValue, CommandBufferBeginInfo, CommandBufferResetFlags, Fence,
+    Offset2D, PipelineBindPoint, Rect2D, RenderPassBeginInfo, SubpassContents,
+};
 use winit::{
     event::{
         ElementState, Event::*, KeyboardInput, ModifiersState, VirtualKeyCode::*, WindowEvent::*,
@@ -51,6 +55,30 @@ impl Application {
         vk.create_image_views();
 
         vk.create_render_pass();
+
+        vk.create_descriptor_set_layout();
+
+        vk.create_graphics_pipeline();
+
+        vk.create_framebuffers();
+
+        vk.create_command_pool();
+
+        // let texture_img = vk.create_texture_image("textures/texture.jpg");
+
+        vk.create_vertex_buffer();
+
+        vk.create_index_buffer();
+
+        vk.create_uniform_buffers();
+
+        vk.create_descriptor_pool();
+
+        vk.create_descriptor_sets();
+
+        vk.create_command_buffers();
+
+        vk.create_sync_objects();
 
         (
             Self {
@@ -123,25 +151,22 @@ impl Application {
                 },
                 RedrawEventsCleared => {}
                 MainEventsCleared => {
-                    // swapchain is invalid if window is resized
-                    let window = self.window.lock().expect("Could not lock mutex on window");
                     if dirty_swap {
-                        let size = window.window.inner_size();
-                        // let size = window.inner_size();
+                        let size = self.window.clone().lock().unwrap().window.inner_size();
                         if size.width > 0 && size.height > 0 {
-                            // recreate_swapchain(&mut state.swapchain, &window);
-                            // state.resize = false;
+                            self.vk.recreate_swapchain(self.window.clone());
                         } else {
                             return;
                         }
                     }
                     // self.draw_frame();
                 }
-                LoopDestroyed => {
-                    // self.device
-                    //     .device_wait_idle()
-                    //     .expect("Failed to wait device idle!")
-                }
+                LoopDestroyed => unsafe {
+                    self.vk
+                        .get_device()
+                        .device_wait_idle()
+                        .expect("Failed to wait device idle!")
+                },
                 _ => {}
             }
         });
@@ -152,4 +177,158 @@ impl Application {
 
         app.main_loop(event_loop);
     }
+
+    fn draw_frame(&mut self) {
+        unsafe {
+            let sync = self.vk.get_sync().lock().unwrap().next().unwrap();
+            let image_available_semaphore = sync.image_available_semaphores;
+            let render_finished_semaphore = sync.render_finished_semaphore;
+            let in_flight_fence = sync.fence;
+            let wait_fences = [in_flight_fence];
+
+            self.vk
+                .get_device()
+                .wait_for_fences(&wait_fences, true, u64::MAX)
+                .expect("Failed to wait for fences!");
+
+            let result = self.vk.get_swapchain().swapchain_loader.acquire_next_image(
+                self.vk.get_swapchain().swapchain,
+                u64::MAX,
+                image_available_semaphore,
+                Fence::null(),
+            );
+
+            let image_index = match result {
+                Ok((idx, is_suboptimal)) => {
+                    if !is_suboptimal {
+                        idx
+                    } else {
+                        panic!("Failed to acquire swapchain image!");
+                    }
+                }
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    self.vk.recreate_swapchain(self.window.clone());
+                    return;
+                }
+                Err(err) => panic!("Failed to acquire swapchain image: {:?}", err),
+            };
+
+            self.vk
+                .get_device()
+                .reset_fences(&wait_fences)
+                .expect("Failed to reset fences!");
+
+            self.vk
+                .get_device()
+                .reset_command_buffer(
+                    self.vk.get_command_buffers()[self.vk.get_sync().lock().unwrap().current_frame],
+                    CommandBufferResetFlags::empty(),
+                )
+                .expect("Failed to reset command buffer!");
+
+            // self.vk.rec
+        }
+    }
+
+    pub fn record_command_buffer(&self, command_buffer: &vk::CommandBuffer, image_index: usize) {
+        let begin_info =
+            CommandBufferBeginInfo::builder().flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE);
+
+        unsafe {
+            self.vk
+                .get_device()
+                .begin_command_buffer(*command_buffer, &begin_info)
+                .expect("Could not make command buffer");
+        };
+
+        let clear_value = [ClearValue {
+            color: ClearColorValue {
+                float32: [0., 0., 0., 1.],
+            },
+        }];
+
+        let render_pass_info = RenderPassBeginInfo::builder()
+            .render_pass(*self.vk.get_render_pass())
+            .framebuffer(*self.vk.get_framebuffers()[image_index])
+            .render_area(Rect2D {
+                offset: Offset2D { x: 0, y: 0 },
+                extent: self.vk.get_swapchain().swapchain_extent,
+            })
+            .clear_values(&clear_value);
+
+        unsafe {
+            self.vk.get_device().cmd_begin_render_pass(
+                *command_buffer,
+                &render_pass_info,
+                SubpassContents::INLINE,
+            );
+
+            self.vk.get_device().cmd_bind_pipeline(
+                *command_buffer,
+                PipelineBindPoint::GRAPHICS,
+                self.vk.graphics_pipeline,
+            );
+
+            let viewports = [*Viewport::builder()
+                .x(0.)
+                .y(0.)
+                .width(self.swapchain.swapchain_extent.width as f32)
+                .height(self.swapchain.swapchain_extent.height as f32)
+                .min_depth(0.)
+                .max_depth(1.)];
+
+            self.vk
+                .get_device()
+                .cmd_set_viewport(*command_buffer, 0, &viewports);
+
+            let scissors = [*Rect2D::builder()
+                .offset(Offset2D { x: 0, y: 0 })
+                .extent(self.swapchain.swapchain_extent)];
+            self.vk
+                .get_device()
+                .cmd_set_scissor(*command_buffer, 0, &scissors);
+
+            let offset: Vec<DeviceSize> = vec![0];
+
+            self.vk.get_device().cmd_bind_vertex_buffers(
+                *command_buffer,
+                0,
+                &[self.vertex_buffer],
+                &offset,
+            );
+
+            self.device.cmd_bind_index_buffer(
+                *command_buffer,
+                self.index_buffer,
+                0,
+                IndexType::UINT32,
+            );
+
+            self.device.cmd_bind_descriptor_sets(
+                *command_buffer,
+                PipelineBindPoint::GRAPHICS,
+                self.pipeline_layout,
+                0,
+                &[self.descriptor_set[self.sync_object.current_frame]],
+                &[],
+            );
+            // self.device
+            //     .cmd_draw(*command_buffer, VERTS.len() as u32, 1, 0, 0);
+            self.device
+                .cmd_draw_indexed(*command_buffer, INDICES.len() as u32, 1, 0, 0, 0);
+
+            self.device.cmd_end_render_pass(*command_buffer);
+
+            self.device
+                .end_command_buffer(*command_buffer)
+                .expect("Could not end command buffer");
+        };
+    }
 }
+
+// impl Drop for Application {
+//     fn drop(&mut self) {
+//         std::mem::drop(self.window.lock());
+//         std::mem::drop(&self.vk);
+//     }
+// }

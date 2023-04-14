@@ -72,4 +72,13 @@ impl Window {
 
         self.surface = Some(info);
     }
+
+    pub fn surface(&self) -> Option<&SurfaceInfo> {
+        self.surface.as_ref()
+    }
 }
+
+// impl Drop for Window {
+//     fn drop(&mut self) {
+//     }
+// }
