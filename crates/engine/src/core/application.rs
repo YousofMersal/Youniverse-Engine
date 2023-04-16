@@ -262,12 +262,6 @@ impl Application {
                 .image_indices(&[image_index])
                 .swapchains(&[self.vk.get_swapchain().swapchain]);
 
-            // let result = self
-            //     .vk
-            //     .get_swapchain()
-            //     .swapchain_loader
-            //     .queue_present(*self.vk.get_queues().present_queue, &present_info);
-
             let res = self
                 .vk
                 .get_swapchain()

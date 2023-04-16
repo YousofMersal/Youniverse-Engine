@@ -2,7 +2,6 @@ use std::{
     collections::HashSet,
     ffi::{c_char, c_void, CString},
     mem::size_of,
-    ops::Deref,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -1140,7 +1139,10 @@ impl Drop for Vulkan {
             self.get_device().destroy_device(None);
 
             if self.is_using_validation_layers() {
-                std::mem::drop(self.debug_message.as_ref().unwrap());
+                match self.debug_message {
+                    Some(_) => std::mem::drop(self.debug_message.take()),
+                    None => {}
+                }
             }
 
             self.instance.as_deref().unwrap().destroy_instance(None);
