@@ -2,7 +2,9 @@ use std::{
     collections::HashSet,
     ffi::{c_char, c_void, CString},
     mem::size_of,
+    ops::Deref,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use ash::{
@@ -13,8 +15,8 @@ use ash::{
         DescriptorBufferInfo, DescriptorPoolCreateInfo, DescriptorPoolSize,
         DescriptorSetAllocateInfo, DescriptorSetLayoutBinding, DescriptorType, DeviceCreateInfo,
         DeviceQueueCreateInfo, Extent2D, Framebuffer, ImageAspectFlags, ImageUsageFlags, ImageView,
-        ImageViewType, PhysicalDevice, Queue, RenderPass, ShaderStageFlags, SwapchainCreateInfoKHR,
-        WriteDescriptorSet,
+        ImageViewType, MemoryMapFlags, PhysicalDevice, Queue, RenderPass, ShaderStageFlags,
+        SwapchainCreateInfoKHR, WriteDescriptorSet,
     },
     Device, Entry, Instance,
 };
@@ -24,7 +26,10 @@ use winit::event_loop::EventLoop;
 
 use crate::core::util::vk_to_str;
 
-use super::sync::{InFlightFrames, MAX_FRAMES_IN_FLIGHT};
+use super::{
+    buffer::{IndexBuffer, VertexBuffer},
+    sync::{InFlightFrames, MAX_FRAMES_IN_FLIGHT},
+};
 
 use super::{
     buffer::{BufferMem, UniformBufferMem, UniformBufferObject},
@@ -137,8 +142,8 @@ impl Vulkan {
         }
     }
 
-    pub fn get_instance(&self) -> Option<Arc<Instance>> {
-        self.instance.clone()
+    pub fn get_instance(&self) -> Arc<Instance> {
+        self.instance.clone().expect("Could not get instance")
     }
 
     pub fn get_device(&self) -> Arc<Device> {
@@ -147,10 +152,6 @@ impl Vulkan {
 
     pub fn select_physical_device(&mut self, window: Arc<Mutex<Window>>) {
         let int = self.get_instance();
-
-        let Some(int) = int else {
-            panic!("Could not create Vulkan instance!");
-        };
 
         let physical_devices = unsafe {
             let dev = int
@@ -201,7 +202,7 @@ impl Vulkan {
     }
 
     fn is_device_suitable(&self, device: &PhysicalDevice, window: Arc<Mutex<Window>>) -> bool {
-        let instance = self.get_instance().unwrap();
+        let instance = self.get_instance();
         let device_props = unsafe { instance.get_physical_device_properties(*device) };
         let device_features = unsafe { instance.get_physical_device_features(*device) };
         let queue_families =
@@ -390,17 +391,17 @@ impl Vulkan {
         let window = window.lock().unwrap();
 
         let mut image_count = swapchain_support.capabilities.min_image_count + 1;
-        if swapchain_support.capabilities.max_image_count > 0
+        if swapchain_support.capabilities.max_image_count != 0
             && image_count > swapchain_support.capabilities.max_image_count
         {
             image_count = swapchain_support.capabilities.max_image_count
         };
 
-        let mut queue_familie_indices = Vec::new();
-
+        let mut queue_familie_indices = vec![];
         let Some(indicies) = self.indicies.clone() else {
             panic!("No queues found");
         };
+
         let image_sharing_mode = if indicies.graphics_family != indicies.present_family {
             queue_familie_indices.push(indicies.graphics_family.unwrap());
             queue_familie_indices.push(indicies.present_family.unwrap());
@@ -425,10 +426,8 @@ impl Vulkan {
             .image_array_layers(1)
             .old_swapchain(vk::SwapchainKHR::null());
 
-        let swapchain_loader = ash::extensions::khr::Swapchain::new(
-            &self.instance.clone().unwrap().clone(),
-            &self.device.clone().unwrap().clone(),
-        );
+        let swapchain_loader =
+            ash::extensions::khr::Swapchain::new(&self.get_instance(), &self.get_device());
 
         let swapchain = unsafe {
             swapchain_loader
@@ -858,11 +857,11 @@ impl Vulkan {
     // }
 
     pub fn create_vertex_buffer(&mut self) {
-        self.vertex_buffer = Some(Arc::new(BufferMem::new(self)));
+        self.vertex_buffer = Some(Arc::new(BufferMem::new::<VertexBuffer>(self)));
     }
 
     pub(crate) fn create_index_buffer(&mut self) {
-        self.index_buffer = Some(Arc::new(BufferMem::new(self)));
+        self.index_buffer = Some(Arc::new(BufferMem::new::<IndexBuffer>(self)));
     }
 
     pub fn create_uniform_buffers(&mut self) {
@@ -979,19 +978,54 @@ impl Vulkan {
     pub unsafe fn cleanup_swapchain(&mut self) {
         let device = &self.get_device();
 
-        self.framebuffers
-            .as_ref()
-            .unwrap()
+        self.get_framebuffers()
             .iter()
-            .for_each(|buffer| device.destroy_framebuffer(*buffer.as_ref(), None));
+            .for_each(|buffer| device.destroy_framebuffer(**buffer, None));
 
-        self.images.as_ref().unwrap().iter().for_each(|image| {
-            device.destroy_image_view(*image.as_ref(), None);
-        });
+        for image in self.images.clone().unwrap().iter() {
+            device.destroy_image_view(**image, None);
+        }
 
         self.get_swapchain()
             .swapchain_loader
             .destroy_swapchain(self.get_swapchain().swapchain, None);
+    }
+
+    pub fn update_uniform_buffer(&self, start_time: Instant, dims: &[u32; 2]) {
+        let elapsed = Instant::now().duration_since(start_time).as_secs_f32();
+
+        let model = glam::Mat4::from_rotation_z(elapsed * 90.0f32.to_radians());
+
+        let view = glam::Mat4::look_at_rh(
+            glam::vec3(2.0, 2.0, 2.0),
+            glam::vec3(0.0, 0.0, 0.0),
+            glam::vec3(0.0, 0.0, 1.0),
+        );
+
+        let aspect = dims[0] as f32 / dims[1] as f32;
+        let mut proj = glam::Mat4::perspective_rh_gl(45.0f32.to_radians(), aspect, 0.1, 10.0);
+
+        proj.y_axis *= -1.;
+
+        let ubo = [UniformBufferObject { model, view, proj }];
+
+        unsafe {
+            let data_ptr =
+                self.get_device()
+                    .map_memory(
+                        self.uniform_buffers.clone().unwrap().mems[self.get_current_frame_idx()],
+                        0,
+                        size_of::<UniformBufferObject>() as u64,
+                        MemoryMapFlags::empty(),
+                    )
+                    .expect("Could not map memory") as *mut UniformBufferObject;
+
+            data_ptr.copy_from_nonoverlapping(ubo.as_ptr(), ubo.len());
+
+            self.get_device().unmap_memory(
+                self.uniform_buffers.clone().unwrap().mems[self.get_current_frame_idx()],
+            )
+        }
     }
 
     pub fn recreate_swapchain(&mut self, window: Arc<Mutex<Window>>) {
@@ -1018,8 +1052,32 @@ impl Vulkan {
         self.command_buffers.as_ref().unwrap()
     }
 
-    pub fn get_framebuffers(&self) -> Vec<Arc<Framebuffer>> {
-        self.framebuffers.unwrap()
+    pub fn get_framebuffers(&self) -> &Vec<Arc<Framebuffer>> {
+        self.framebuffers.as_ref().unwrap()
+    }
+
+    pub fn get_t_pipeline(&self) -> Arc<Pipeline> {
+        let Some(pipeline) = self.pipeline.clone() else {
+            panic!("pipeline is not initialized");
+        };
+
+        pipeline
+    }
+
+    pub fn get_vertex_buffer(&self) -> Arc<BufferMem> {
+        self.vertex_buffer.clone().unwrap()
+    }
+
+    pub fn get_index_buffer(&self) -> Arc<BufferMem> {
+        self.index_buffer.clone().unwrap()
+    }
+
+    pub fn get_current_frame_idx(&self) -> usize {
+        self.sync.clone().unwrap().lock().unwrap().current_frame
+    }
+
+    pub fn get_descriptor_set(&self, idx: usize) -> vk::DescriptorSet {
+        self.descriptor_sets.clone().unwrap()[idx]
     }
 }
 

@@ -1,4 +1,4 @@
-use std::mem::size_of;
+use std::mem::{size_of, size_of_val};
 
 use ash::vk::{
     Buffer, BufferCopy, BufferCreateInfo, BufferUsageFlags, CommandBuffer,
@@ -10,7 +10,7 @@ use ash::vk::{
 use glam::Mat4;
 
 use super::{
-    shaders::{Vertex, VERTS},
+    shaders::{Vertex, INDICES, VERTS},
     sync::MAX_FRAMES_IN_FLIGHT,
     vk::Vulkan,
 };
@@ -18,9 +18,28 @@ use super::{
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct UniformBufferObject {
-    model: Mat4,
-    view: Mat4,
-    proj: Mat4,
+    pub model: Mat4,
+    pub view: Mat4,
+    pub proj: Mat4,
+}
+
+pub trait BufferType {
+    fn get_usage() -> BufferUsageFlags;
+}
+
+#[derive(Debug)]
+pub struct VertexBuffer;
+impl BufferType for VertexBuffer {
+    fn get_usage() -> BufferUsageFlags {
+        BufferUsageFlags::VERTEX_BUFFER
+    }
+}
+#[derive(Debug)]
+pub struct IndexBuffer;
+impl BufferType for IndexBuffer {
+    fn get_usage() -> BufferUsageFlags {
+        BufferUsageFlags::INDEX_BUFFER
+    }
 }
 
 pub struct UniformBufferMem {
@@ -60,23 +79,44 @@ impl UniformBufferMem {
 }
 
 impl BufferMem {
-    pub fn new(vk: &Vulkan) -> Self {
-        let buffer_size = (size_of::<Vertex>() * VERTS.len()) as u64;
+    pub fn new<T: BufferType>(vk: &Vulkan) -> Self {
+        let buffer_size = match T::get_usage() {
+            BufferUsageFlags::VERTEX_BUFFER => (size_of::<Vertex>() * VERTS.len()) as u64,
+            BufferUsageFlags::INDEX_BUFFER => (size_of_val(&INDICES)) as u64,
+            _ => panic!("Unsupported buffer type"),
+        };
+
+        // let buffer_size = (size_of::<Vertex>() * VERTS.len()) as u64;
 
         let (stagin_buffer, stagin_memory, _staging_size) = create_buffer(
             vk,
             buffer_size,
             BufferUsageFlags::TRANSFER_SRC,
-            &(MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_CACHED),
+            &(MemoryPropertyFlags::HOST_VISIBLE | MemoryPropertyFlags::HOST_COHERENT),
         );
 
         unsafe {
-            let data_ptr = vk
-                .get_device()
-                .map_memory(stagin_memory, 0, buffer_size, MemoryMapFlags::empty())
-                .expect("Failed to map memory") as *mut Vertex;
+            match T::get_usage() {
+                BufferUsageFlags::VERTEX_BUFFER => {
+                    let ptr =
+                        vk.get_device()
+                            .map_memory(stagin_memory, 0, buffer_size, MemoryMapFlags::empty())
+                            .expect("Failed to map memory") as *mut Vertex;
 
-            data_ptr.copy_from_nonoverlapping(VERTS.as_ptr(), VERTS.len());
+                    ptr.copy_from_nonoverlapping(VERTS.as_ptr(), VERTS.len());
+                }
+                BufferUsageFlags::INDEX_BUFFER => {
+                    let ptr = vk
+                        .get_device()
+                        .map_memory(stagin_memory, 0, buffer_size, MemoryMapFlags::empty())
+                        .expect("Failed to map memory") as *mut u32;
+
+                    ptr.copy_from_nonoverlapping(INDICES.as_ptr(), INDICES.len());
+                }
+                _ => panic!("Unsupported buffer type"),
+            };
+
+            // data_ptr.copy_from_nonoverlapping(VERTS.as_ptr(), VERTS.len());
 
             vk.get_device().unmap_memory(stagin_memory);
         }
@@ -84,7 +124,15 @@ impl BufferMem {
         let (buffer, memory, _) = create_buffer(
             vk,
             buffer_size,
-            BufferUsageFlags::TRANSFER_DST | BufferUsageFlags::VERTEX_BUFFER,
+            match T::get_usage() {
+                BufferUsageFlags::VERTEX_BUFFER => {
+                    BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::TRANSFER_DST
+                }
+                BufferUsageFlags::INDEX_BUFFER => {
+                    BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::TRANSFER_DST
+                }
+                _ => panic!("Unsupported buffer type"),
+            },
             &MemoryPropertyFlags::DEVICE_LOCAL,
         );
 
@@ -127,7 +175,6 @@ pub fn create_buffer(
 
     let mem_props = unsafe {
         vk.get_instance()
-            .unwrap()
             .get_physical_device_memory_properties(*vk.get_physical_device())
     };
 

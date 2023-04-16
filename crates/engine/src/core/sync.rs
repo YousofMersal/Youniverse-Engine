@@ -17,6 +17,7 @@ pub struct InFlightFrames {
     pub sync_objects: Vec<SyncObjects>,
     pub current_frame: usize,
 }
+
 impl InFlightFrames {
     pub fn new(vk: &Vulkan) -> InFlightFrames {
         let mut sync_objects = Vec::new();

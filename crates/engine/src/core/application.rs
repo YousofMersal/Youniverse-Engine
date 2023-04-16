@@ -4,8 +4,9 @@ use std::{
 };
 
 use ash::vk::{
-    self, ClearColorValue, ClearValue, CommandBufferBeginInfo, CommandBufferResetFlags, Fence,
-    Offset2D, PipelineBindPoint, Rect2D, RenderPassBeginInfo, SubpassContents,
+    self, ClearColorValue, ClearValue, CommandBufferBeginInfo, CommandBufferResetFlags, DeviceSize,
+    Fence, IndexType, Offset2D, PipelineBindPoint, PresentInfoKHR, Rect2D, RenderPassBeginInfo,
+    SubmitInfo, SubpassContents, Viewport,
 };
 use winit::{
     event::{
@@ -14,7 +15,7 @@ use winit::{
     event_loop::ControlFlow,
 };
 
-use super::window::Window;
+use super::{shaders::INDICES, window::Window};
 use super::{vk::Vulkan, window::EventLoop};
 
 #[allow(dead_code)]
@@ -37,10 +38,10 @@ impl Application {
         let mut vk = Vulkan::new();
         vk.create_instance(&event_loop);
 
-        window.lock().unwrap().create_surface(
-            vk.get_vulkan_entry().clone(),
-            vk.get_instance().unwrap().clone(),
-        );
+        window
+            .lock()
+            .unwrap()
+            .create_surface(vk.get_vulkan_entry().clone(), vk.get_instance().clone());
 
         vk.create_and_set_debug_callback();
 
@@ -159,7 +160,7 @@ impl Application {
                             return;
                         }
                     }
-                    // self.draw_frame();
+                    self.draw_frame();
                 }
                 LoopDestroyed => unsafe {
                     self.vk
@@ -221,12 +222,65 @@ impl Application {
             self.vk
                 .get_device()
                 .reset_command_buffer(
-                    self.vk.get_command_buffers()[self.vk.get_sync().lock().unwrap().current_frame],
+                    self.vk.get_command_buffers()[self.vk.get_current_frame_idx()],
                     CommandBufferResetFlags::empty(),
                 )
                 .expect("Failed to reset command buffer!");
 
-            // self.vk.rec
+            self.record_command_buffer(
+                &self.vk.get_command_buffers()[self.vk.get_current_frame_idx()],
+                image_index as usize,
+            );
+
+            let dims = self.window.lock().unwrap().dims.unwrap();
+
+            self.vk.update_uniform_buffer(self.start_time, &dims);
+
+            let wait_semaphores = &[image_available_semaphore];
+            let signal_semaphores = &[render_finished_semaphore];
+            let wait_stages = &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+
+            let submit_info = [*SubmitInfo::builder()
+                .wait_semaphores(wait_semaphores)
+                .signal_semaphores(signal_semaphores)
+                .wait_dst_stage_mask(wait_stages)
+                .command_buffers(
+                    &[self.vk.get_command_buffers()[self.vk.get_current_frame_idx()]],
+                )];
+
+            self.vk
+                .get_device()
+                .queue_submit(
+                    *self.vk.get_queues().graphics_queue,
+                    &submit_info,
+                    in_flight_fence,
+                )
+                .expect("Failed to submit draw command buffer!");
+
+            let present_info = *PresentInfoKHR::builder()
+                .wait_semaphores(signal_semaphores)
+                .image_indices(&[image_index])
+                .swapchains(&[self.vk.get_swapchain().swapchain]);
+
+            // let result = self
+            //     .vk
+            //     .get_swapchain()
+            //     .swapchain_loader
+            //     .queue_present(*self.vk.get_queues().present_queue, &present_info);
+
+            let res = self
+                .vk
+                .get_swapchain()
+                .swapchain_loader
+                .queue_present(*self.vk.get_queues().present_queue, &present_info);
+
+            match res {
+                Ok(false) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    self.vk.recreate_swapchain(self.window.clone())
+                }
+                Ok(true) => {}
+                Err(e) => panic!("failed to present queue. Cause: {}", e),
+            }
         }
     }
 
@@ -266,14 +320,14 @@ impl Application {
             self.vk.get_device().cmd_bind_pipeline(
                 *command_buffer,
                 PipelineBindPoint::GRAPHICS,
-                self.vk.graphics_pipeline,
+                self.vk.get_t_pipeline().get_pipeline(),
             );
 
             let viewports = [*Viewport::builder()
                 .x(0.)
                 .y(0.)
-                .width(self.swapchain.swapchain_extent.width as f32)
-                .height(self.swapchain.swapchain_extent.height as f32)
+                .width(self.vk.get_swapchain().swapchain_extent.width as f32)
+                .height(self.vk.get_swapchain().swapchain_extent.height as f32)
                 .min_depth(0.)
                 .max_depth(1.)];
 
@@ -283,7 +337,7 @@ impl Application {
 
             let scissors = [*Rect2D::builder()
                 .offset(Offset2D { x: 0, y: 0 })
-                .extent(self.swapchain.swapchain_extent)];
+                .extent(self.vk.get_swapchain().swapchain_extent)];
             self.vk
                 .get_device()
                 .cmd_set_scissor(*command_buffer, 0, &scissors);
@@ -293,33 +347,40 @@ impl Application {
             self.vk.get_device().cmd_bind_vertex_buffers(
                 *command_buffer,
                 0,
-                &[self.vertex_buffer],
+                &[self.vk.get_vertex_buffer().buffer],
                 &offset,
             );
 
-            self.device.cmd_bind_index_buffer(
+            self.vk.get_device().cmd_bind_index_buffer(
                 *command_buffer,
-                self.index_buffer,
+                self.vk.get_index_buffer().buffer,
                 0,
                 IndexType::UINT32,
             );
 
-            self.device.cmd_bind_descriptor_sets(
+            self.vk.get_device().cmd_bind_descriptor_sets(
                 *command_buffer,
                 PipelineBindPoint::GRAPHICS,
-                self.pipeline_layout,
+                self.vk.get_t_pipeline().get_layout(),
                 0,
-                &[self.descriptor_set[self.sync_object.current_frame]],
+                &[self.vk.get_descriptor_set(self.vk.get_current_frame_idx())],
                 &[],
             );
             // self.device
             //     .cmd_draw(*command_buffer, VERTS.len() as u32, 1, 0, 0);
-            self.device
-                .cmd_draw_indexed(*command_buffer, INDICES.len() as u32, 1, 0, 0, 0);
+            self.vk.get_device().cmd_draw_indexed(
+                *command_buffer,
+                INDICES.len() as u32,
+                1,
+                0,
+                0,
+                0,
+            );
 
-            self.device.cmd_end_render_pass(*command_buffer);
+            self.vk.get_device().cmd_end_render_pass(*command_buffer);
 
-            self.device
+            self.vk
+                .get_device()
                 .end_command_buffer(*command_buffer)
                 .expect("Could not end command buffer");
         };
