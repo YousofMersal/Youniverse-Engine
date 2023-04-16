@@ -7,7 +7,7 @@ use std::{
 };
 
 use ash::{
-    extensions::ext::DebugUtils,
+    extensions::{ext::DebugUtils, khr::Surface},
     vk::{
         self, make_api_version, CommandBufferAllocateInfo, CommandBufferLevel,
         CommandPoolCreateFlags, ComponentMapping, CompositeAlphaFlagsKHR, DebugUtilsMessengerEXT,
@@ -15,7 +15,7 @@ use ash::{
         DescriptorSetAllocateInfo, DescriptorSetLayoutBinding, DescriptorType, DeviceCreateInfo,
         DeviceQueueCreateInfo, Extent2D, Framebuffer, ImageAspectFlags, ImageUsageFlags, ImageView,
         ImageViewType, MemoryMapFlags, PhysicalDevice, Queue, RenderPass, ShaderStageFlags,
-        SwapchainCreateInfoKHR, WriteDescriptorSet,
+        SurfaceKHR, SwapchainCreateInfoKHR, WriteDescriptorSet,
     },
     Device, Entry, Instance,
 };
@@ -37,7 +37,6 @@ use super::{
     window::Window,
 };
 
-// const REQUIRED_EXTENSIONS: Vec<&str> = vec!["VK_KHR_swapchain"];
 pub struct Vulkan {
     instance: Option<Arc<Instance>>,
     entry: Arc<Entry>,
@@ -61,6 +60,22 @@ pub struct Vulkan {
     descriptor_sets: Option<Vec<vk::DescriptorSet>>,
     command_buffers: Option<Vec<vk::CommandBuffer>>,
     sync: Option<Arc<Mutex<InFlightFrames>>>,
+    surface: Option<Arc<SurfaceInfo>>,
+}
+
+#[derive(Clone)]
+pub struct SurfaceInfo {
+    pub surface: SurfaceKHR,
+    pub surface_loader: Surface,
+}
+
+impl SurfaceInfo {
+    pub fn new(surface: SurfaceKHR, surface_loader: Surface) -> Self {
+        Self {
+            surface,
+            surface_loader,
+        }
+    }
 }
 
 pub struct Queues {
@@ -79,6 +94,12 @@ pub struct SwapChain {
 pub struct QueueFamilyIndices {
     pub graphics_family: Option<u32>,
     pub present_family: Option<u32>,
+}
+
+impl Default for QueueFamilyIndices {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 struct SwapChainSupportDetail {
@@ -137,6 +158,7 @@ impl Vulkan {
             descriptor_pool: None,
             descriptor_sets: None,
             command_buffers: None,
+            surface: None,
             sync: None,
         }
     }
@@ -149,7 +171,7 @@ impl Vulkan {
         self.device.clone().expect("Could not get device")
     }
 
-    pub fn select_physical_device(&mut self, window: Arc<Mutex<Window>>) {
+    pub fn select_physical_device(&mut self) {
         let int = self.get_instance();
 
         let physical_devices = unsafe {
@@ -164,7 +186,7 @@ impl Vulkan {
         let dev = Some(Arc::new(
             *physical_devices
                 .iter()
-                .filter(|device| self.is_device_suitable(device, window.clone()))
+                .filter(|device| self.is_device_suitable(device))
                 .map(|device| (device, self.rate_device_suitability(&int, device)))
                 .max_by(|(_, x), (_, y)| x.cmp(y))
                 .expect("Could not find any suitable GPU!")
@@ -200,16 +222,15 @@ impl Vulkan {
         score
     }
 
-    fn is_device_suitable(&self, device: &PhysicalDevice, window: Arc<Mutex<Window>>) -> bool {
+    fn is_device_suitable(&self, device: &PhysicalDevice) -> bool {
         let instance = self.get_instance();
         let device_props = unsafe { instance.get_physical_device_properties(*device) };
         let device_features = unsafe { instance.get_physical_device_features(*device) };
-        let queue_families =
-            self.find_queue_families(&self.instance.clone().unwrap(), device, window.clone());
+        let queue_families = self.find_queue_families(&self.instance.clone().unwrap(), device);
 
         let is_extensions_supported = self.check_device_extension_support(device);
         let swapchain_support = if is_extensions_supported {
-            let swapchain_support = self.query_spawnchain_support(device, window.clone());
+            let swapchain_support = self.query_spawnchain_support(device);
             !swapchain_support.formats.is_empty() && !swapchain_support.present_modes.is_empty()
         } else {
             false
@@ -276,7 +297,6 @@ impl Vulkan {
         &self,
         instance: &Instance,
         device: &PhysicalDevice,
-        window: Arc<Mutex<Window>>,
     ) -> QueueFamilyIndices {
         let queue_familys =
             unsafe { instance.get_physical_device_queue_family_properties(*device) };
@@ -289,16 +309,14 @@ impl Vulkan {
             }
 
             let is_present_support = unsafe {
-                let window = window.lock().expect("Could not lock window");
-                window
-                    .surface
+                self.surface
                     .clone()
                     .unwrap()
                     .surface_loader
                     .get_physical_device_surface_support(
                         *device,
                         i as u32,
-                        window.surface.clone().unwrap().surface,
+                        self.surface.clone().unwrap().surface,
                     )
                     .unwrap()
             };
@@ -315,11 +333,10 @@ impl Vulkan {
         res
     }
 
-    pub fn create_logical_device(&mut self, window: Arc<Mutex<Window>>) {
+    pub fn create_logical_device(&mut self) {
         let indicies = self.find_queue_families(
             &self.instance.clone().unwrap(),
             &self.physical_device.clone().unwrap(),
-            window.clone(),
         );
 
         let mut unique_queue_families = HashSet::new();
@@ -380,14 +397,12 @@ impl Vulkan {
     }
 
     pub fn create_swapchain(&mut self, window: Arc<Mutex<Window>>) {
-        let swapchain_support = self.query_spawchain_support(window.clone());
+        let swapchain_support = self.query_spawchain_support();
 
         let surface_format = self.choose_swap_surface_format(&swapchain_support.formats);
 
         let present_mode = self.choose_swap_present_mode(&swapchain_support.present_modes);
-        let extent = self.choose_swap_extent(&swapchain_support.capabilities, window.clone());
-
-        let window = window.lock().unwrap();
+        let extent = self.choose_swap_extent(&swapchain_support.capabilities, window);
 
         let mut image_count = swapchain_support.capabilities.min_image_count + 1;
         if swapchain_support.capabilities.max_image_count != 0
@@ -410,7 +425,7 @@ impl Vulkan {
         };
 
         let swap_chain_info = SwapchainCreateInfoKHR::builder()
-            .surface(window.surface.clone().unwrap().surface)
+            .surface(self.surface.clone().unwrap().surface)
             .min_image_count(image_count)
             .image_format(surface_format.format)
             .image_color_space(surface_format.color_space)
@@ -470,7 +485,7 @@ impl Vulkan {
             .engine_version(version.to_owned())
             .api_version(make_api_version(0, 1, 3, 238));
 
-        let extension_names = self.get_required_extensions(&e_loop);
+        let extension_names = self.get_required_extensions(e_loop);
 
         let layers: Vec<CString> = if self.is_using_validation_layers() {
             VALIDATION_LAYERS
@@ -526,7 +541,7 @@ impl Vulkan {
 
         if props.is_empty() {
             eprintln!("No validation layers available!");
-            return false;
+            false
         } else {
             // This has O(M * N) but with a larger constant, constant is neglible in computational time,
             // however this allows for a ton more VALIDATION_LAYERS in the future without compromising performance
@@ -582,14 +597,8 @@ impl Vulkan {
     fn query_spawnchain_support(
         &self,
         physical_device: &vk::PhysicalDevice,
-        window: Arc<Mutex<Window>>,
     ) -> SwapChainSupportDetail {
-        let surface_info = window
-            .lock()
-            .expect("Could not lock window")
-            .surface
-            .clone()
-            .unwrap();
+        let surface_info = self.surface.clone().unwrap();
         unsafe {
             let capabilities = surface_info
                 .surface_loader
@@ -622,13 +631,9 @@ impl Vulkan {
         }
     }
 
-    fn query_spawchain_support(&self, window: Arc<Mutex<Window>>) -> SwapChainSupportDetail {
-        let surface_info = window
-            .lock()
-            .expect("Could not lock window")
-            .surface
-            .clone()
-            .unwrap();
+    fn query_spawchain_support(&self) -> SwapChainSupportDetail {
+        let surface_info = self.surface.clone().unwrap();
+
         unsafe {
             let capabilities = surface_info
                 .surface_loader
@@ -974,6 +979,15 @@ impl Vulkan {
         self.queues.clone().expect("Could not get queues")
     }
 
+    /// Cleans up the swapchain of this [`Vulkan`] releasing every resources aquired by it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the swapchain is not initialized.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because it is not guaranteed that the swapchain is not in use.
     pub unsafe fn cleanup_swapchain(&mut self) {
         let device = &self.get_device();
 
@@ -1078,6 +1092,26 @@ impl Vulkan {
     pub fn get_descriptor_set(&self, idx: usize) -> vk::DescriptorSet {
         self.descriptor_sets.clone().unwrap()[idx]
     }
+
+    pub(crate) fn create_surface(&mut self, window: &Mutex<Window>) {
+        let surface = unsafe {
+            let window = window.lock().unwrap();
+            create_surface(
+                &self.get_vulkan_entry(),
+                &self.get_instance(),
+                window.get_raw_display_handle(),
+                window.get_raw_window_handle(),
+                None,
+            )
+            .expect("Could not create surface")
+        };
+
+        let surface_loader = Surface::new(&self.get_vulkan_entry(), &self.get_instance());
+
+        let info = SurfaceInfo::new(surface, surface_loader);
+
+        self.surface = Some(Arc::new(info));
+    }
 }
 
 impl Default for Vulkan {
@@ -1138,12 +1172,15 @@ impl Drop for Vulkan {
 
             self.get_device().destroy_device(None);
 
-            if self.is_using_validation_layers() {
-                match self.debug_message {
-                    Some(_) => std::mem::drop(self.debug_message.take()),
-                    None => {}
-                }
+            if self.is_using_validation_layers() && self.debug_message.is_some() {
+                std::mem::drop(self.debug_message.take())
             }
+
+            self.surface
+                .clone()
+                .unwrap()
+                .surface_loader
+                .destroy_surface(self.surface.clone().unwrap().surface, None);
 
             self.instance.as_deref().unwrap().destroy_instance(None);
         }

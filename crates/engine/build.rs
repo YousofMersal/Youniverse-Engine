@@ -55,7 +55,7 @@ fn recompile_shaders() {
             let output_name = format!("./spv/{}.spv", &name);
             println!("Found file {:?}", path.as_os_str());
             let res = Command::new("glslc")
-                .current_dir(&dir_path.parent().unwrap())
+                .current_dir(dir_path.parent().unwrap())
                 .arg(name)
                 .arg("-o")
                 .arg(output_name)

@@ -38,16 +38,13 @@ impl Application {
         let mut vk = Vulkan::new();
         vk.create_instance(&event_loop);
 
-        window
-            .lock()
-            .unwrap()
-            .create_surface(vk.get_vulkan_entry().clone(), vk.get_instance().clone());
+        vk.create_surface(&window);
 
         vk.create_and_set_debug_callback();
 
-        vk.select_physical_device(window.clone());
+        vk.select_physical_device();
 
-        vk.create_logical_device(window.clone());
+        vk.create_logical_device();
 
         vk.make_queues();
 
@@ -380,10 +377,3 @@ impl Application {
         };
     }
 }
-
-// impl Drop for Application {
-//     fn drop(&mut self) {
-//         std::mem::drop(self.window.lock());
-//         std::mem::drop(&self.vk);
-//     }
-// }

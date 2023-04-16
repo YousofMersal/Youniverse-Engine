@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use ash::{extensions::khr::Surface, vk::SurfaceKHR, Entry, Instance};
-use ash_window::create_surface;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use winit::window::WindowBuilder;
 
@@ -12,22 +10,6 @@ pub type EventLoop = winit::event_loop::EventLoop<()>;
 pub struct Window {
     pub dims: Option<[u32; 2]>,
     pub window: Arc<winit::window::Window>,
-    pub surface: Option<SurfaceInfo>,
-}
-
-#[derive(Clone)]
-pub struct SurfaceInfo {
-    pub surface: SurfaceKHR,
-    pub surface_loader: Surface,
-}
-
-impl SurfaceInfo {
-    pub fn new(surface: SurfaceKHR, surface_loader: Surface) -> Self {
-        Self {
-            surface,
-            surface_loader,
-        }
-    }
 }
 
 impl Window {
@@ -44,41 +26,14 @@ impl Window {
         );
 
         let dims = Some([DEFAULT_WIDTH, DEFAULT_HEIGHT]);
-        (
-            Self {
-                window,
-                dims,
-                surface: None,
-            },
-            event_loop,
-        )
+        (Self { window, dims }, event_loop)
     }
 
-    pub fn create_surface(&mut self, entry: Arc<Entry>, instance: Arc<Instance>) {
-        let surface = unsafe {
-            create_surface(
-                &entry,
-                &instance,
-                self.window.raw_display_handle(),
-                self.window.raw_window_handle(),
-                None,
-            )
-            .expect("Could not create surface")
-        };
-
-        let surface_loader = Surface::new(&entry, &instance);
-
-        let info = SurfaceInfo::new(surface, surface_loader);
-
-        self.surface = Some(info);
+    pub fn get_raw_window_handle(&self) -> raw_window_handle::RawWindowHandle {
+        self.window.raw_window_handle()
     }
 
-    pub fn surface(&self) -> Option<&SurfaceInfo> {
-        self.surface.as_ref()
+    pub fn get_raw_display_handle(&self) -> raw_window_handle::RawDisplayHandle {
+        self.window.raw_display_handle()
     }
 }
-
-// impl Drop for Window {
-//     fn drop(&mut self) {
-//     }
-// }
