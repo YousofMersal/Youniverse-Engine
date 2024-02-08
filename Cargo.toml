@@ -1,22 +1,44 @@
 [package]
-name = "tempestforge-engine"
+name = "youniverse-engine"
 version = "0.1.0"
 edition = "2021"
-exclude = ["crates/"]
-
-[workspace]
-  members = [
-    # "crates/*",
-    "client"
-  ]
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[profile.dev]
-opt-level = 1
 
 [dependencies]
-engine = { path = "crates/engine" }
+window = { path = "crates/window" }
+tracing = "0.1.40"
+tracing-subscriber = {version = "0.3.18", features = ["tracing-log"]}
+
+[workspace.dependencies]
+egui = {version = "0.26.0"}
+egui-winit = {version = "0.26.0", features = ["serde"]}
+glam = {version = "0.25.0", features = ["serde", "rand", "bytemuck"]}
+ash = {version = "0.37.3", features = ["linked"]}
+anyhow = "1.0.75"
+tracing = "0.1.40"
+tracing-subscriber = {version = "0.3.18", features = ["tracing-log"]}
+
+[workspace]
+  members = [ "crates/render", "crates/ui",
+    "crates/*",
+    "crates/window",
+    # "crates/render"
+    # "client"
+]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+# [profile.dev]
+# opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[workspace.lints.clippy]
+depricated = "forbid"
+suspicious = "warn"
+complexity = "warn"
+perf = "deny"
 
 [[bin]]
 name = "client"
 path = "client/src/main.rs"
+
