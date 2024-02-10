@@ -15,8 +15,11 @@ use winit::{
     event_loop::ControlFlow,
 };
 
-use super::{shaders::INDICES, window::Window};
-use super::{vk::Vulkan, window::EventLoop};
+use super::{
+    shaders::INDICES,
+    vk::Vulkan,
+    window::{EventLoop, Window},
+};
 
 #[allow(dead_code)]
 pub struct Application {

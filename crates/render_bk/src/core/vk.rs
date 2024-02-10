@@ -20,7 +20,7 @@ use ash::{
     Device, Entry, Instance,
 };
 use ash_window::*;
-use raw_window_handle::HasRawDisplayHandle;
+use raw_window_handle::HasDisplayHandle;
 use winit::event_loop::EventLoop;
 
 use crate::core::util::vk_to_str;
@@ -543,8 +543,9 @@ impl Vulkan {
             eprintln!("No validation layers available!");
             false
         } else {
-            // This has O(M * N) but with a larger constant, constant is neglible in computational time,
-            // however this allows for a ton more VALIDATION_LAYERS in the future without compromising performance
+            // This has O(M * N) but with a larger constant, constant is neglible in computational
+            // time, however this allows for a ton more VALIDATION_LAYERS in the future
+            // without compromising performance
             VALIDATION_LAYERS
                 .iter()
                 .fold(false, |_acc, required_layer| {
@@ -555,12 +556,13 @@ impl Vulkan {
                 })
         }
     }
+
     pub fn get_swap_required_extensions(&self) -> Vec<&str> {
         ["VK_KHR_swapchain"].to_vec()
     }
 
     pub fn get_required_extensions(&self, event_loop: &EventLoop<()>) -> Vec<*const c_char> {
-        let mut res = enumerate_required_extensions(event_loop.raw_display_handle())
+        let mut res = enumerate_required_extensions(event_loop.display_handle().unwrap().as_raw())
             .expect("Could not enumerate required extensions")
             .to_vec();
 

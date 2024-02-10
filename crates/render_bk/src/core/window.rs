@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
-use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
-use winit::window::WindowBuilder;
+use winit::{
+    raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle},
+    window::WindowBuilder,
+};
 
 const DEFAULT_WIDTH: u32 = 1920;
 const DEFAULT_HEIGHT: u32 = 1080;
@@ -29,11 +31,17 @@ impl Window {
         (Self { window, dims }, event_loop)
     }
 
-    pub fn get_raw_window_handle(&self) -> raw_window_handle::RawWindowHandle {
-        self.window.raw_window_handle()
+    pub fn get_raw_window_handle(&self) -> RawWindowHandle {
+        self.window
+            .window_handle()
+            .expect("Could not retrieve window handle")
+            .as_raw()
     }
 
-    pub fn get_raw_display_handle(&self) -> raw_window_handle::RawDisplayHandle {
-        self.window.raw_display_handle()
+    pub fn get_raw_display_handle(&self) -> RawDisplayHandle {
+        self.window
+            .display_handle()
+            .expect("Could not retrieve window handle")
+            .as_raw()
     }
 }

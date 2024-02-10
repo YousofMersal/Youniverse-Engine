@@ -1,17 +1,43 @@
+mod events;
 mod raw_handle;
+use ash::vk;
+use render::Vk;
 
 use anyhow::{bail, Result};
-use tracing::{event, info, span, trace, Level};
+use events::windowevents;
+use tracing::error;
 use winit::{
-    event::{Event, WindowEvent},
+    event::Event,
     event_loop::EventLoop,
-    raw_window_handle::HasWindowHandle,
+    keyboard::ModifiersState,
+    raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window::{Window as WinitWindow, WindowBuilder},
 };
 
 pub struct Window {
-    wind: WinitWindow,
+    window: WinitWindow,
     evt_loop: EventLoop<()>,
+    ctx: WindowContext,
+}
+
+pub struct WindowContext {
+    vk: Vk,
+    surface: vk::SurfaceKHR,
+}
+
+impl WindowContext {
+    pub fn new(ext: Vec<*const i8>) -> Self {
+        let vk = Vk::new(&ext);
+
+        Self {
+            vk,
+            surface: vk::SurfaceKHR::null(),
+        }
+    }
+
+    pub fn set_surface(&mut self, surface: vk::SurfaceKHR) {
+        self.surface = surface;
+    }
 }
 
 impl Window {
@@ -29,33 +55,70 @@ impl Window {
             bail!("Failed to create window!")
         };
 
-        // envent_loop.run(move |event, elwt| {
-        //     trace!("{event:?}");
+        let ext =
+            raw_handle::enumerate_required_extensions(window.display_handle().unwrap()).unwrap();
 
-        //     match event {
-        //         Event::WindowEvent { window_id, event } if window_id == window.id() => match
-        // event {             WindowEvent::CloseRequested => elwt.exit(),
-        //             WindowEvent::RedrawRequested => {
-        //                 window.pre_present_notify();
-        //             }
-        //             _ => {}
-        //         },
-        //         _ => (),
-        //     }
-        // });
+        let ctx = WindowContext::new(ext);
 
-        Ok(Window {
-            wind: window,
+        let mut wind = Window {
+            window,
             evt_loop,
-        })
+            ctx,
+        };
+
+        let surface = wind.create_surface_khr();
+        wind.ctx.set_surface(surface);
+
+        Ok(wind)
     }
 
-    pub fn logical_loop(self) {
-        let window = match Window::new(String::from("youniverse-engine"), 1920, 1080) {
-            Ok(window) => window,
-            Err(e) => {
-                panic!("Could not initialize window!: {}", e);
+    pub fn run(self) {
+        let mut modifiers = ModifiersState::default();
+
+        let evt_res = self.evt_loop.run(move |event, elwt| match event {
+            // Event::NewEvents(_) => todo!(),
+            Event::WindowEvent { window_id, event } if window_id == self.window.id() => {
+                windowevents(&mut modifiers, &event, &elwt);
             }
-        };
+            Event::DeviceEvent { event, .. } => match event {
+                // winit::event::DeviceEvent::MouseMotion { delta } => todo!("Mouse mothion"),
+                // winit::event::DeviceEvent::MouseWheel { delta } => todo!("Mouse wheel"),
+                // winit::event::DeviceEvent::Motion { axis, value } => todo!("Mouse motion"),
+                // winit::event::DeviceEvent::Button { button, state } => todo!(),
+                _ => {}
+            },
+            _ => {}
+        });
+
+        match evt_res {
+            Ok(_) => {}
+            Err(e) => panic!("Event loop error: {}", e),
+        }
+    }
+
+    pub fn create_surface_khr(&self) -> vk::SurfaceKHR {
+        let rdh = self
+            .window
+            .display_handle()
+            .expect("Could not get display handle");
+
+        let rwh = self
+            .window
+            .window_handle()
+            .expect("Could not get window handle");
+
+        unsafe {
+            if let Ok(surface) = crate::raw_handle::create_surface(
+                self.ctx.vk.get_entry(),
+                self.ctx.vk.get_instance(),
+                rwh,
+                rdh,
+                None,
+            ) {
+                surface
+            } else {
+                panic!("Could not create surface")
+            }
+        }
     }
 }

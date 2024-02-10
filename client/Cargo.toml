@@ -4,4 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tempestforge-engine = {path = ".."}
+tracing = "0.1.40"
+tracing-subscriber = {version = "0.3.17", features = ["tracing-log"]}
+# tracing-subscriber = {workspace=true}
+youniverse-engine = {path = ".."}

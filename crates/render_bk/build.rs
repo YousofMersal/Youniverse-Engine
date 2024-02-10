@@ -7,9 +7,9 @@ use std::{
 };
 
 fn main() {
-    if should_recompile_shaders() {
-        recompile_shaders();
-    }
+    // if should_recompile_shaders() {
+    //     recompile_shaders();
+    // }
 }
 
 fn should_recompile_shaders() -> bool {
