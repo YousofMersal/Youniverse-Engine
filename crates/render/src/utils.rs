@@ -1,6 +1,7 @@
 use std::ffi::{c_char, CStr};
 
 use ash::Entry;
+use tracing::{error, info};
 
 pub const VALIDATION_LAYERS: [&str; 2] = ["VK_LAYER_KHRONOS_validation", "VK_LAYER_LUNARG_monitor"];
 pub const REQUIRED_EXTENSIONS: [&str; 3] =
@@ -20,13 +21,13 @@ pub fn check_validation_layer_support(entry: &Entry) -> bool {
         .expect("failed to enumerate instance layers properties!");
 
     if layer_properties.is_empty() {
-        eprintln!("no available layers.");
+        error!("no available layers.");
         return false;
     }
 
-    println!("instance available layers: ");
+    info!("instance available layers: ");
     for layer in &layer_properties {
-        println!("\t {}", vk_to_str(&layer.layer_name));
+        tracing::info!("\t {}", vk_to_str(&layer.layer_name));
     }
 
     VALIDATION_LAYERS

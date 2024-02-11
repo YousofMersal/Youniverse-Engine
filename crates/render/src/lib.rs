@@ -15,18 +15,17 @@
 
 mod device;
 mod instance;
+mod swapchain;
 mod utils;
 
-use ash::{
-    vk::{self, PhysicalDevice, PhysicalDeviceFeatures2},
-    Entry, Instance,
-};
+use ash::{vk::PhysicalDevice, Entry, Instance};
+use device::{create_logical_device, create_physical_devices};
 
 pub struct Vk {
     entry: Entry,
     instance: Instance,
     physical_device: PhysicalDevice,
-    // device: Device,
+    device: ash::Device,
 }
 
 impl Vk {
@@ -38,13 +37,14 @@ impl Vk {
     pub fn new(ext: &[*const i8]) -> Self {
         let entry = Entry::linked();
         let instance = instance::init(&entry, ext);
-        let physical_device = Self::create_physical_device(&instance);
+        let physical_device = create_physical_devices(&instance);
+        let device = create_logical_device(&instance, physical_device);
         // let device = todo!();
         Vk {
             entry,
             instance,
             physical_device,
-            // device,
+            device,
         }
     }
 
@@ -54,42 +54,5 @@ impl Vk {
 
     pub fn get_instance(&self) -> &Instance {
         &self.instance
-    }
-
-    pub fn create_physical_device(instance: &Instance) -> vk::PhysicalDevice {
-        let mut features13 = vk::PhysicalDeviceVulkan13Features::builder().build();
-
-        let mut features12 = vk::PhysicalDeviceVulkan12Features::builder().build();
-        features12.p_next =
-            &mut features13 as *mut vk::PhysicalDeviceVulkan13Features as *mut std::ffi::c_void;
-
-        let mut features = vk::PhysicalDeviceFeatures2::builder()
-            .push_next(&mut features12)
-            .build();
-
-        let p_device: PhysicalDevice = unsafe {
-            instance
-                .enumerate_physical_devices()
-                .expect("Physical device error!")
-        }
-        .iter()
-        .find_map(|p_dev| unsafe {
-            let p_props = instance.get_physical_device_properties(*p_dev);
-            // let p_features = instance.get_physical_device_features(*p_dev);
-            instance.get_physical_device_features2(*p_dev, &mut features);
-
-            dbg!("Device Name: {}", features.p_next);
-
-            // find a discrete gpu
-            match p_props.device_type {
-                vk::PhysicalDeviceType::DISCRETE_GPU | vk::PhysicalDeviceType::INTEGRATED_GPU => {
-                    Some(*p_dev)
-                }
-                _ => None,
-            }
-        })
-        .expect("No suitable device found!");
-
-        p_device
     }
 }

@@ -5,7 +5,6 @@ use render::Vk;
 
 use anyhow::{bail, Result};
 use events::windowevents;
-use tracing::error;
 use winit::{
     event::Event,
     event_loop::EventLoop,
@@ -78,15 +77,15 @@ impl Window {
         let evt_res = self.evt_loop.run(move |event, elwt| match event {
             // Event::NewEvents(_) => todo!(),
             Event::WindowEvent { window_id, event } if window_id == self.window.id() => {
-                windowevents(&mut modifiers, &event, &elwt);
+                windowevents(&mut modifiers, &event, elwt);
             }
-            Event::DeviceEvent { event, .. } => match event {
-                // winit::event::DeviceEvent::MouseMotion { delta } => todo!("Mouse mothion"),
-                // winit::event::DeviceEvent::MouseWheel { delta } => todo!("Mouse wheel"),
-                // winit::event::DeviceEvent::Motion { axis, value } => todo!("Mouse motion"),
-                // winit::event::DeviceEvent::Button { button, state } => todo!(),
-                _ => {}
-            },
+            // Event::DeviceEvent { event, .. } => match event {
+            // winit::event::DeviceEvent::MouseMotion { delta } => todo!("Mouse mothion"),
+            // winit::event::DeviceEvent::MouseWheel { delta } => todo!("Mouse wheel"),
+            // winit::event::DeviceEvent::Motion { axis, value } => todo!("Mouse motion"),
+            // winit::event::DeviceEvent::Button { button, state } => todo!(),
+            // _ => {}
+            // },
             _ => {}
         });
 
